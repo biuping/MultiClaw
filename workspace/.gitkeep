@@ -1,0 +1,3 @@
+# Agent workspaces will be created here automatically.
+# Each agent gets its own subdirectory with SOUL.md, IDENTITY.md, TOOLS.md, etc.
+# This directory is gitignored by default — personal agent configs should not be committed.

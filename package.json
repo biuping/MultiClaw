@@ -1,0 +1,16 @@
+{
+  "name": "multiclaw",
+  "version": "1.0.0",
+  "description": "MultiClaw - OpenClaw Multi-Agent Management Platform",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install && cd multiClaw-server && npm install && cd ../multiClaw-web && npm install",
+    "dev": "concurrently \"cd multiClaw-server && npm run dev\" \"cd multiClaw-web && npm run dev\"",
+    "build": "cd multiClaw-web && npm run build",
+    "db:init": "cd multiClaw-server && npm run db:init",
+    "start": "cd multiClaw-server && npm start"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
