@@ -52,6 +52,7 @@ const statusConfig: Record<string, { color: string; label: string; icon: React.R
   revising: { color: 'processing', label: '修改中', icon: <EditOutlined /> },
   accepted: { color: 'success', label: '已验收', icon: <CheckCircleOutlined /> },
   paused: { color: 'default', label: '已暂停', icon: <CloseCircleOutlined /> },
+  scheduled: { color: 'purple', label: '定时中', icon: <ClockCircleOutlined /> },
 };
 
 const priorityConfig: Record<string, { color: string; label: string }> = {
@@ -133,14 +134,29 @@ export default function TasksPage() {
   const handleCreate = async () => {
     try {
       const values = await form.validateFields();
-      await taskApi.create({
+      const createData: any = {
         title: values.title,
         description: values.description,
         coordinatorId: values.coordinatorId,
         priority: values.priority,
         taskType: values.taskType || 'standard',
         reviewerId: values.taskType === 'iterative' ? (values.reviewerId || values.coordinatorId) : undefined,
-      });
+      };
+
+      // 定时任务参数
+      if (values.taskType === 'scheduled') {
+        createData.scheduleType = values.scheduleType;
+        if (values.scheduleType === 'once') {
+          createData.scheduleAnchor = values.scheduleAnchor ? new Date(values.scheduleAnchor).toISOString() : undefined;
+        } else if (values.scheduleType === 'interval') {
+          createData.scheduleIntervalMs = values.scheduleIntervalMin ? values.scheduleIntervalMin * 60000 : undefined;
+          createData.scheduleAnchor = values.scheduleAnchor ? new Date(values.scheduleAnchor).toISOString() : undefined;
+        } else if (values.scheduleType === 'cron') {
+          createData.scheduleExpr = values.scheduleExpr;
+        }
+      }
+
+      await taskApi.create(createData);
       message.success('任务创建成功');
       form.resetFields();
       setCreateVisible(false);
@@ -237,14 +253,27 @@ export default function TasksPage() {
       setDispatchResult(null);
 
       // 创建任务并执行
-      const createRes = await taskApi.create({
+      const createData: any = {
         title: values.message.slice(0, 50),
         description: values.message,
         coordinatorId: values.coordinatorId,
         priority: values.priority || 'medium',
         taskType: values.taskType || 'standard',
         reviewerId: values.taskType === 'iterative' ? (values.reviewerId || values.coordinatorId) : undefined,
-      });
+      };
+
+      if (values.taskType === 'scheduled') {
+        createData.scheduleType = values.scheduleType;
+        if (values.scheduleType === 'once') {
+          createData.scheduleAnchor = values.scheduleAnchor ? new Date(values.scheduleAnchor).toISOString() : undefined;
+        } else if (values.scheduleType === 'interval') {
+          createData.scheduleIntervalMs = values.scheduleIntervalMin ? values.scheduleIntervalMin * 60000 : undefined;
+        } else if (values.scheduleType === 'cron') {
+          createData.scheduleExpr = values.scheduleExpr;
+        }
+      }
+
+      const createRes = await taskApi.create(createData);
 
       const taskId = createRes.data.data.id;
       message.loading({ content: '团队分发中...', key: 'dispatch', duration: 0 });
@@ -534,7 +563,7 @@ export default function TasksPage() {
                   <Space>
                     <Space>
                       <FilterOutlined />
-                      {['全部', 'pending', 'running', 'review', 'revising', 'completed', 'accepted', 'paused', 'failed', 'cancelled'].map(s => (
+                      {['全部', 'pending', 'running', 'scheduled', 'review', 'revising', 'completed', 'accepted', 'paused', 'failed', 'cancelled'].map(s => (
                         <Tag
                           key={s}
                           color={(s === '全部' ? !statusFilter : statusFilter === s) ? 'blue' : 'default'}
@@ -630,8 +659,14 @@ export default function TasksPage() {
                                   {task.taskType === 'iterative' && (
                                     <Tag color="purple">🔄 迭代</Tag>
                                   )}
+                                  {task.taskType === 'scheduled' && (
+                                    <Tag color="purple">⏰ 定时</Tag>
+                                  )}
                                   {task.taskType === 'iterative' && task.iteration > 1 && (
                                     <Tag color="orange">第{task.iteration}轮</Tag>
+                                  )}
+                                  {task.taskType === 'scheduled' && task.nextRunAt && (
+                                    <Tag color="blue">下次: {new Date(task.nextRunAt).toLocaleString('zh-CN')}</Tag>
                                   )}
                                 </Space>
                               }
@@ -640,6 +675,9 @@ export default function TasksPage() {
                                   <span>协调者: {task.coordinatorName || '未知'}</span>
                                   {task.taskType === 'iterative' && task.reviewerName && (
                                     <span>审阅人: {task.reviewerName}</span>
+                                  )}
+                                  {task.taskType === 'scheduled' && task.runCount > 0 && (
+                                    <span>已执行{task.runCount}次</span>
                                   )}
                                   <span>消息: {task.messageCount || 0}</span>
                                   <span>创建: {new Date(task.createdAt).toLocaleString('zh-CN')}</span>
@@ -689,6 +727,7 @@ export default function TasksPage() {
                       <Select>
                         <Select.Option value="standard">📋 标准任务</Select.Option>
                         <Select.Option value="iterative">🔄 迭代审阅</Select.Option>
+                        <Select.Option value="scheduled">⏰ 定时任务</Select.Option>
                       </Select>
                     </Form.Item>
                     <Form.Item noStyle shouldUpdate={(prev, cur) => prev.taskType !== cur.taskType}>
@@ -706,6 +745,40 @@ export default function TasksPage() {
                               ))}
                             </Select>
                           </Form.Item>
+                        ) : getFieldValue('taskType') === 'scheduled' ? (
+                          <>
+                            <Form.Item name="scheduleType" label="调度方式">
+                              <Select placeholder="选择调度方式">
+                                <Select.Option value="once">🕐 一次性</Select.Option>
+                                <Select.Option value="interval">🔁 固定间隔</Select.Option>
+                                <Select.Option value="cron">📅 Cron</Select.Option>
+                              </Select>
+                            </Form.Item>
+                            <Form.Item noStyle shouldUpdate={(prev, cur) => prev.scheduleType !== cur.scheduleType}>
+                              {({ getFieldValue: getST }) => {
+                                const st = getST('scheduleType');
+                                return (
+                                  <>
+                                    {st === 'once' && (
+                                      <Form.Item name="scheduleAnchor" label="执行时间">
+                                        <Input type="datetime-local" />
+                                      </Form.Item>
+                                    )}
+                                    {st === 'interval' && (
+                                      <Form.Item name="scheduleIntervalMin" label="间隔(分钟)">
+                                        <Input type="number" min={1} placeholder="30" />
+                                      </Form.Item>
+                                    )}
+                                    {st === 'cron' && (
+                                      <Form.Item name="scheduleExpr" label="Cron 表达式">
+                                        <Input placeholder="0 9 * * 1-5" />
+                                      </Form.Item>
+                                    )}
+                                  </>
+                                );
+                              }}
+                            </Form.Item>
+                          </>
                         ) : null
                       }
                     </Form.Item>
@@ -878,6 +951,7 @@ export default function TasksPage() {
             <Select>
               <Select.Option value="standard">📋 标准任务</Select.Option>
               <Select.Option value="iterative">🔄 迭代审阅</Select.Option>
+              <Select.Option value="scheduled">⏰ 定时任务</Select.Option>
             </Select>
           </Form.Item>
           <Form.Item noStyle shouldUpdate={(prev, cur) => prev.taskType !== cur.taskType}>
@@ -895,6 +969,50 @@ export default function TasksPage() {
                     ))}
                   </Select>
                 </Form.Item>
+              ) : getFieldValue('taskType') === 'scheduled' ? (
+                <>
+                  <Form.Item name="scheduleType" label="调度方式" rules={[{ required: true, message: '请选择调度方式' }]}>
+                    <Select placeholder="选择调度方式">
+                      <Select.Option value="once">🕐 一次性（指定时间执行）</Select.Option>
+                      <Select.Option value="interval">🔁 固定间隔</Select.Option>
+                      <Select.Option value="cron">📅 Cron 表达式</Select.Option>
+                    </Select>
+                  </Form.Item>
+                  <Form.Item noStyle shouldUpdate={(prev, cur) => prev.scheduleType !== cur.scheduleType}>
+                    {({ getFieldValue: getScheduleType }) => {
+                      const st = getScheduleType('scheduleType');
+                      return (
+                        <>
+                          {st === 'once' && (
+                            <Form.Item name="scheduleAnchor" label="执行时间" rules={[{ required: true, message: '请选择执行时间' }]}>
+                              <Input type="datetime-local" />
+                            </Form.Item>
+                          )}
+                          {st === 'interval' && (
+                            <>
+                              <Form.Item name="scheduleIntervalMin" label="间隔时间（分钟）" rules={[{ required: true, message: '请输入间隔时间' }]}>
+                                <Input type="number" min={1} placeholder="例如：30（每30分钟执行一次）" />
+                              </Form.Item>
+                              <Form.Item name="scheduleAnchor" label="首次执行时间（可选）">
+                                <Input type="datetime-local" />
+                              </Form.Item>
+                            </>
+                          )}
+                          {st === 'cron' && (
+                            <>
+                              <Form.Item name="scheduleExpr" label="Cron 表达式" rules={[{ required: true, message: '请输入Cron表达式' }]}>
+                                <Input placeholder="分 时 日 月 周，例如: 0 9 * * 1-5" />
+                              </Form.Item>
+                              <div className="text-xs text-gray-400 mb-4 px-1">
+                                常用示例：每天9点 <code>0 9 * * *</code> · 工作日9点 <code>0 9 * * 1-5</code> · 每小时 <code>0 * * * *</code> · 每30分钟 <code>*/30 * * * *</code>
+                              </div>
+                            </>
+                          )}
+                        </>
+                      );
+                    }}
+                  </Form.Item>
+                </>
               ) : null
             }
           </Form.Item>

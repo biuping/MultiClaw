@@ -30,6 +30,7 @@ import {
   AuditOutlined,
   EditOutlined,
   PauseOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -49,6 +50,7 @@ const statusConfig: Record<string, { color: string; label: string }> = {
   revising: { color: 'processing', label: '修改中' },
   accepted: { color: 'success', label: '已验收' },
   paused: { color: 'default', label: '已暂停' },
+  scheduled: { color: 'purple', label: '定时中' },
 };
 
 const markdownComponents = {
@@ -359,6 +361,56 @@ export default function TaskDetailPanel({ task, visible, onClose, onRefresh }: T
               恢复
             </Button>
           )}
+          {/* 定时任务操作 */}
+          {task.taskType === 'scheduled' && task.status === 'scheduled' && (
+            <>
+              <Button
+                icon={<ThunderboltOutlined />}
+                onClick={async () => {
+                  try {
+                    await taskApi.trigger(task.id);
+                    message.success('已触发立即执行');
+                    onRefresh();
+                  } catch (e: any) {
+                    message.error('触发失败: ' + (e.response?.data?.error || e.message));
+                  }
+                }}
+              >
+                立即执行
+              </Button>
+              <Button
+                icon={<PauseOutlined />}
+                onClick={async () => {
+                  try {
+                    await taskApi.pauseSchedule(task.id);
+                    message.success('已暂停定时任务');
+                    onRefresh();
+                  } catch (e: any) {
+                    message.error('暂停失败');
+                  }
+                }}
+              >
+                暂停
+              </Button>
+            </>
+          )}
+          {task.taskType === 'scheduled' && task.status === 'paused' && (
+            <Button
+              type="primary"
+              icon={<PlayCircleOutlined />}
+              onClick={async () => {
+                try {
+                  await taskApi.resumeSchedule(task.id);
+                  message.success('已恢复定时任务');
+                  onRefresh();
+                } catch (e: any) {
+                  message.error('恢复失败');
+                }
+              }}
+            >
+              恢复
+            </Button>
+          )}
           {/* 迭代审阅：修改中时可以提交审阅 */}
           {task.taskType === 'iterative' && task.status === 'revising' && task.result && (
             <Button
@@ -434,6 +486,34 @@ export default function TaskDetailPanel({ task, visible, onClose, onRefresh }: T
             <Descriptions.Item label="迭代轮次">
               <Tag color={task.iteration > 1 ? 'orange' : 'default'}>第 {task.iteration} 轮</Tag>
             </Descriptions.Item>
+          </>
+        )}
+        {task.taskType === 'scheduled' && (
+          <>
+            <Descriptions.Item label="调度方式">
+              {task.scheduleType === 'once' ? '🕐 一次性' : task.scheduleType === 'interval' ? '🔁 固定间隔' : '📅 Cron'}
+            </Descriptions.Item>
+            {task.scheduleType === 'interval' && task.scheduleIntervalMs && (
+              <Descriptions.Item label="间隔时间">
+                {task.scheduleIntervalMs >= 3600000
+                  ? `${(task.scheduleIntervalMs / 3600000).toFixed(1)}小时`
+                  : task.scheduleIntervalMs >= 60000
+                  ? `${(task.scheduleIntervalMs / 60000).toFixed(0)}分钟`
+                  : `${(task.scheduleIntervalMs / 1000).toFixed(0)}秒`}
+              </Descriptions.Item>
+            )}
+            {task.scheduleType === 'cron' && task.scheduleExpr && (
+              <Descriptions.Item label="Cron">{task.scheduleExpr}</Descriptions.Item>
+            )}
+            <Descriptions.Item label="下次执行">
+              {task.nextRunAt ? new Date(task.nextRunAt).toLocaleString('zh-CN') : '未设定'}
+            </Descriptions.Item>
+            <Descriptions.Item label="已执行">{task.runCount || 0} 次</Descriptions.Item>
+            {task.lastRunAt && (
+              <Descriptions.Item label="上次执行">
+                {new Date(task.lastRunAt).toLocaleString('zh-CN')}
+              </Descriptions.Item>
+            )}
           </>
         )}
         <Descriptions.Item label="创建时间">

@@ -113,7 +113,25 @@ router.get('/:id', async (req, res) => {
 // 创建任务
 router.post('/', validateBody(createTaskSchema), async (req, res) => {
   try {
-    const { title, description, coordinatorId, priority, taskType, reviewerId, metadata } = req.body;
+    const { title, description, coordinatorId, priority, taskType, reviewerId, metadata,
+      scheduleType, scheduleExpr, scheduleIntervalMs, scheduleAnchor } = req.body;
+
+    // 定时任务校验
+    if (taskType === 'scheduled' || scheduleType) {
+      if (!scheduleType) {
+        return res.status(400).json({ success: false, error: '定时任务必须指定 scheduleType' });
+      }
+      if (scheduleType === 'cron' && !scheduleExpr) {
+        return res.status(400).json({ success: false, error: 'cron 类型必须指定 scheduleExpr' });
+      }
+      if (scheduleType === 'interval' && !scheduleIntervalMs) {
+        return res.status(400).json({ success: false, error: 'interval 类型必须指定 scheduleIntervalMs' });
+      }
+      if (scheduleType === 'once' && !scheduleAnchor) {
+        return res.status(400).json({ success: false, error: 'once 类型必须指定 scheduleAnchor（执行时间）' });
+      }
+    }
+
     const task = await taskService.create({
       title,
       description: description || '',
@@ -122,6 +140,10 @@ router.post('/', validateBody(createTaskSchema), async (req, res) => {
       taskType: taskType || 'standard',
       reviewerId: reviewerId || coordinatorId,
       metadata,
+      scheduleType,
+      scheduleExpr,
+      scheduleIntervalMs,
+      scheduleAnchor,
     });
     res.json({ success: true, data: task });
   } catch (error) {
@@ -132,9 +154,11 @@ router.post('/', validateBody(createTaskSchema), async (req, res) => {
 // 更新任务
 router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
   try {
-    const { title, description, status, priority, result, metadata, taskType, reviewerId, iteration, reviewComment } = req.body;
+    const { title, description, status, priority, result, metadata, taskType, reviewerId, iteration, reviewComment,
+      scheduleType, scheduleExpr, scheduleIntervalMs, scheduleAnchor, nextRunAt, lastRunAt, runCount } = req.body;
     const task = await taskService.update(req.params.id, {
       title, description, status, priority, result, metadata, taskType, reviewerId, iteration, reviewComment,
+      scheduleType, scheduleExpr, scheduleIntervalMs, scheduleAnchor, nextRunAt, lastRunAt, runCount,
     });
     if (!task) {
       return res.status(404).json({ success: false, error: 'Task not found' });
@@ -205,6 +229,46 @@ router.post('/:id/submit-for-review', async (req, res) => {
       return res.status(400).json({ success: false, error: 'result 为必填' });
     }
     const task = await taskService.submitForReview(req.params.id, result);
+    if (!task) {
+      return res.status(404).json({ success: false, error: 'Task not found' });
+    }
+    res.json({ success: true, data: task });
+  } catch (error) {
+    res.status(400).json({ success: false, error: String(error) });
+  }
+});
+
+// ========== 定时任务 API ==========
+
+import { triggerScheduledTask, pauseScheduledTask, resumeScheduledTask } from '../services/task-scheduler';
+
+// 立即执行定时任务
+router.post('/:id/trigger', async (req, res) => {
+  try {
+    await triggerScheduledTask(req.params.id);
+    res.json({ success: true, message: '定时任务已触发执行' });
+  } catch (error) {
+    res.status(400).json({ success: false, error: String(error) });
+  }
+});
+
+// 暂停定时任务
+router.post('/:id/pause-schedule', async (req, res) => {
+  try {
+    const task = await pauseScheduledTask(req.params.id);
+    if (!task) {
+      return res.status(404).json({ success: false, error: 'Task not found' });
+    }
+    res.json({ success: true, data: task });
+  } catch (error) {
+    res.status(400).json({ success: false, error: String(error) });
+  }
+});
+
+// 恢复定时任务
+router.post('/:id/resume-schedule', async (req, res) => {
+  try {
+    const task = await resumeScheduledTask(req.params.id);
     if (!task) {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }

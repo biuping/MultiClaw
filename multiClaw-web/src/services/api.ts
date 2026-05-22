@@ -132,7 +132,7 @@ export const taskApi = {
     api.get<{ success: boolean; data: Task[] }>('/tasks', { params }),
   getById: (id: string) => 
     api.get<{ success: boolean; data: Task }>(`/tasks/${id}`),
-  create: (data: { title: string; description?: string; coordinatorId: string; priority?: string; taskType?: 'standard' | 'iterative'; reviewerId?: string }) => 
+  create: (data: { title: string; description?: string; coordinatorId: string; priority?: string; taskType?: 'standard' | 'iterative' | 'scheduled'; reviewerId?: string; scheduleType?: 'once' | 'interval' | 'cron'; scheduleExpr?: string; scheduleIntervalMs?: number; scheduleAnchor?: string }) => 
     api.post<{ success: boolean; data: Task }>('/tasks', data),
   update: (id: string, data: any) => 
     api.put<{ success: boolean; data: Task }>(`/tasks/${id}`, data),
@@ -151,6 +151,13 @@ export const taskApi = {
     api.post<{ success: boolean; data: Task }>(`/tasks/${id}/review`, data),
   submitForReview: (id: string, data: { result: string }) => 
     api.post<{ success: boolean; data: Task }>(`/tasks/${id}/submit-for-review`, data),
+  // 定时任务 API
+  trigger: (id: string) => 
+    api.post<{ success: boolean; message: string }>(`/tasks/${id}/trigger`),
+  pauseSchedule: (id: string) => 
+    api.post<{ success: boolean; data: Task }>(`/tasks/${id}/pause-schedule`),
+  resumeSchedule: (id: string) => 
+    api.post<{ success: boolean; data: Task }>(`/tasks/${id}/resume-schedule`),
 };
 
 export default api;

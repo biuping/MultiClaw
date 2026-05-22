@@ -258,6 +258,70 @@ const migrations: Array<{ name: string; up: (db: any) => Promise<void> }> = [
       await db.execAsync('CREATE INDEX IF NOT EXISTS idx_task_reviews_task ON task_reviews(task_id)');
     },
   },
+  {
+    name: '007_task_type_scheduled',
+    up: async (db) => {
+      // schedule_type: once(一次性) / interval(固定间隔) / cron(cron表达式)
+      try {
+        await db.execAsync("ALTER TABLE tasks ADD COLUMN schedule_type TEXT");
+      } catch (err: any) {
+        if (!String(err).includes('duplicate column')) {
+          console.warn('[migration 007] ALTER TABLE tasks ADD schedule_type:', err);
+        }
+      }
+      // schedule_expr: cron 表达式，如 '0 9 * * 1-5' 表示周一到五9点
+      try {
+        await db.execAsync('ALTER TABLE tasks ADD COLUMN schedule_expr TEXT');
+      } catch (err: any) {
+        if (!String(err).includes('duplicate column')) {
+          console.warn('[migration 007] ALTER TABLE tasks ADD schedule_expr:', err);
+        }
+      }
+      // schedule_interval_ms: 间隔毫秒数（interval 类型使用）
+      try {
+        await db.execAsync('ALTER TABLE tasks ADD COLUMN schedule_interval_ms INTEGER');
+      } catch (err: any) {
+        if (!String(err).includes('duplicate column')) {
+          console.warn('[migration 007] ALTER TABLE tasks ADD schedule_interval_ms:', err);
+        }
+      }
+      // schedule_anchor: 首次执行时间 ISO 时间戳
+      try {
+        await db.execAsync('ALTER TABLE tasks ADD COLUMN schedule_anchor TEXT');
+      } catch (err: any) {
+        if (!String(err).includes('duplicate column')) {
+          console.warn('[migration 007] ALTER TABLE tasks ADD schedule_anchor:', err);
+        }
+      }
+      // next_run_at: 下次执行时间
+      try {
+        await db.execAsync('ALTER TABLE tasks ADD COLUMN next_run_at TEXT');
+      } catch (err: any) {
+        if (!String(err).includes('duplicate column')) {
+          console.warn('[migration 007] ALTER TABLE tasks ADD schedule_next_run_at:', err);
+        }
+      }
+      // last_run_at: 上次执行时间
+      try {
+        await db.execAsync('ALTER TABLE tasks ADD COLUMN last_run_at TEXT');
+      } catch (err: any) {
+        if (!String(err).includes('duplicate column')) {
+          console.warn('[migration 007] ALTER TABLE tasks ADD schedule_last_run_at:', err);
+        }
+      }
+      // run_count: 已执行次数
+      try {
+        await db.execAsync('ALTER TABLE tasks ADD COLUMN run_count INTEGER DEFAULT 0');
+      } catch (err: any) {
+        if (!String(err).includes('duplicate column')) {
+          console.warn('[migration 007] ALTER TABLE tasks ADD schedule_run_count:', err);
+        }
+      }
+      // 索引
+      await db.execAsync('CREATE INDEX IF NOT EXISTS idx_tasks_schedule_next_run ON tasks(next_run_at)');
+      await db.execAsync('CREATE INDEX IF NOT EXISTS idx_tasks_task_type ON tasks(task_type)');
+    },
+  },
 ];
 
 /**

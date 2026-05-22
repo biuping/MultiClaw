@@ -77,8 +77,18 @@ export const createTaskSchema = z.object({
   taskType: z.enum({
     standard: 'standard',
     iterative: 'iterative',
+    scheduled: 'scheduled',
   }).optional(),
   reviewerId: z.string().optional(),
+  // 定时任务字段
+  scheduleType: z.enum({
+    once: 'once',
+    interval: 'interval',
+    cron: 'cron',
+  }).optional(),
+  scheduleExpr: z.string().max(200).optional(),
+  scheduleIntervalMs: z.number().int().min(60000).optional(), // 最少1分钟
+  scheduleAnchor: z.string().optional(), // ISO 时间戳
   metadata: z.record(z.string(), z.any()).optional(),
 });
 
@@ -95,6 +105,7 @@ export const updateTaskSchema = z.object({
     revising: 'revising',
     accepted: 'accepted',
     paused: 'paused',
+    scheduled: 'scheduled',
   }).optional(),
   priority: z.enum({
     low: 'low',
@@ -106,10 +117,23 @@ export const updateTaskSchema = z.object({
   taskType: z.enum({
     standard: 'standard',
     iterative: 'iterative',
+    scheduled: 'scheduled',
   }).optional(),
   reviewerId: z.string().optional(),
   iteration: z.number().int().min(1).optional(),
   reviewComment: z.string().optional(),
+  // 定时任务字段
+  scheduleType: z.enum({
+    once: 'once',
+    interval: 'interval',
+    cron: 'cron',
+  }).optional(),
+  scheduleExpr: z.string().max(200).optional(),
+  scheduleIntervalMs: z.number().int().min(60000).optional(),
+  scheduleAnchor: z.string().optional(),
+  nextRunAt: z.string().optional(),
+  lastRunAt: z.string().optional(),
+  runCount: z.number().int().min(0).optional(),
 });
 
 // ========== Chat Schema ==========

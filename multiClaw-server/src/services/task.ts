@@ -6,12 +6,20 @@ export interface Task {
   title: string;
   description: string;
   coordinatorId: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'review' | 'revising' | 'accepted' | 'paused';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'review' | 'revising' | 'accepted' | 'paused' | 'scheduled';
   priority: 'low' | 'medium' | 'high';
-  taskType: 'standard' | 'iterative';
+  taskType: 'standard' | 'iterative' | 'scheduled';
   reviewerId?: string;
   iteration: number;
   reviewComment?: string;
+  // 定时任务字段
+  scheduleType?: 'once' | 'interval' | 'cron';
+  scheduleExpr?: string;
+  scheduleIntervalMs?: number;
+  scheduleAnchor?: string;
+  nextRunAt?: string;
+  lastRunAt?: string;
+  runCount: number;
   result?: string;
   metadata: any;
   checkpoint?: string | null;
@@ -32,19 +40,40 @@ class TaskService {
     const id = uuidv4();
     const now = new Date().toISOString();
 
+    // 定时任务：计算首次执行时间
+    let nextRunAt: string | null = null;
+    if (data.taskType === 'scheduled') {
+      if (data.scheduleAnchor) {
+        nextRunAt = data.scheduleAnchor;
+      } else if (data.scheduleType === 'interval' && data.scheduleIntervalMs) {
+        nextRunAt = now;
+      } else if (data.scheduleType === 'cron' && data.scheduleExpr) {
+        nextRunAt = computeNextCronRun(data.scheduleExpr, new Date());
+      }
+    }
+
+    const status = data.taskType === 'scheduled' ? 'scheduled' : (data.status || 'pending');
+
     await db.runAsync(
-      `INSERT INTO tasks (id, title, description, coordinator_id, status, priority, task_type, reviewer_id, iteration, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tasks (id, title, description, coordinator_id, status, priority, task_type, reviewer_id, iteration,
+        schedule_type, schedule_expr, schedule_interval_ms, schedule_anchor, next_run_at, run_count, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         data.title || '未命名任务',
         data.description || '',
         data.coordinatorId || '',
-        data.status || 'pending',
+        status,
         data.priority || 'medium',
         data.taskType || 'standard',
         data.reviewerId || data.coordinatorId || '',
         data.iteration || 1,
+        data.scheduleType || null,
+        data.scheduleExpr || null,
+        data.scheduleIntervalMs || null,
+        data.scheduleAnchor || null,
+        nextRunAt,
+        data.runCount || 0,
         JSON.stringify(data.metadata || {}),
         now,
         now,
@@ -125,6 +154,13 @@ class TaskService {
     if (data.reviewerId !== undefined) { updates.push('reviewer_id = ?'); values.push(data.reviewerId); }
     if (data.iteration !== undefined) { updates.push('iteration = ?'); values.push(data.iteration); }
     if (data.reviewComment !== undefined) { updates.push('review_comment = ?'); values.push(data.reviewComment); }
+    if (data.scheduleType !== undefined) { updates.push('schedule_type = ?'); values.push(data.scheduleType); }
+    if (data.scheduleExpr !== undefined) { updates.push('schedule_expr = ?'); values.push(data.scheduleExpr); }
+    if (data.scheduleIntervalMs !== undefined) { updates.push('schedule_interval_ms = ?'); values.push(data.scheduleIntervalMs); }
+    if (data.scheduleAnchor !== undefined) { updates.push('schedule_anchor = ?'); values.push(data.scheduleAnchor); }
+    if (data.nextRunAt !== undefined) { updates.push('next_run_at = ?'); values.push(data.nextRunAt); }
+    if (data.lastRunAt !== undefined) { updates.push('last_run_at = ?'); values.push(data.lastRunAt); }
+    if (data.runCount !== undefined) { updates.push('run_count = ?'); values.push(data.runCount); }
 
     updates.push('updated_at = ?');
     values.push(now);
@@ -280,6 +316,13 @@ class TaskService {
       reviewerId: row.reviewer_id || row.coordinator_id,
       iteration: row.iteration || 1,
       reviewComment: row.review_comment,
+      scheduleType: row.schedule_type,
+      scheduleExpr: row.schedule_expr,
+      scheduleIntervalMs: row.schedule_interval_ms,
+      scheduleAnchor: row.schedule_anchor,
+      nextRunAt: row.next_run_at,
+      lastRunAt: row.last_run_at,
+      runCount: row.run_count || 0,
       result: row.result,
       metadata: JSON.parse(row.metadata || '{}'),
       checkpoint: row.checkpoint,
@@ -296,3 +339,124 @@ class TaskService {
 }
 
 export const taskService = new TaskService();
+
+/**
+ * 简单的 cron 表达式下一次执行时间计算
+ * 支持 5 位标准 cron: 分 时 日 月 周
+ * 示例: "0 9 * * 1-5" = 每周一到五 9:00
+ */
+export function computeNextCronRun(expr: string, from: Date): string {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    throw new Error('cron 表达式必须是5位: 分 时 日 月 周');
+  }
+
+  const [minuteField, hourField, dayField, monthField, weekdayField] = parts;
+
+  // 解析 cron 字段为数值数组
+  function parseField(field: string, min: number, max: number): number[] {
+    const values = new Set<number>();
+    for (const part of field.split(',')) {
+      if (part === '*') {
+        for (let i = min; i <= max; i++) values.add(i);
+      } else if (part.includes('/')) {
+        const [base, step] = part.split('/');
+        const stepNum = parseInt(step);
+        const start = base === '*' ? min : parseInt(base);
+        for (let i = start; i <= max; i += stepNum) values.add(i);
+      } else if (part.includes('-')) {
+        const [s, e] = part.split('-');
+        for (let i = parseInt(s); i <= parseInt(e); i++) values.add(i);
+      } else {
+        values.add(parseInt(part));
+      }
+    }
+    return [...values].sort((a, b) => a - b);
+  }
+
+  const minutes = parseField(minuteField, 0, 59);
+  const hours = parseField(hourField, 0, 23);
+  const days = parseField(dayField, 1, 31);
+  const months = parseField(monthField, 1, 12);
+  const weekdays = parseField(weekdayField, 0, 6); // 0=Sunday
+
+  // 从 from+1 分钟开始搜索，最多搜索 2 年
+  const start = new Date(from.getTime() + 60000);
+  start.setSeconds(0, 0);
+
+  const limit = new Date(from.getTime() + 2 * 365 * 24 * 60 * 60 * 1000);
+
+  // 逐月搜索
+  const d = new Date(start);
+  while (d < limit) {
+    const m = d.getMonth() + 1; // 1-12
+    if (!months.includes(m)) {
+      d.setMonth(d.getMonth() + 1, 1);
+      d.setHours(0, 0, 0, 0);
+      continue;
+    }
+
+    const day = d.getDate();
+    const wd = d.getDay(); // 0=Sunday
+    const dayMatch = days.includes(day);
+    const wdMatch = weekdays.includes(wd);
+    // 日和周都指定时取并集，只有一方指定时取该方
+    const dayOk = (dayField !== '*' && weekdayField !== '*') ? (dayMatch || wdMatch) : (dayMatch && wdMatch);
+
+    if (!dayOk) {
+      d.setDate(day + 1);
+      d.setHours(0, 0, 0, 0);
+      continue;
+    }
+
+    // 检查时和分
+    for (const h of hours) {
+      if (h < d.getHours()) continue;
+      for (const min of minutes) {
+        if (h === d.getHours() && min < d.getMinutes()) continue;
+        const candidate = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, min, 0, 0);
+        if (candidate >= start) {
+          return candidate.toISOString();
+        }
+      }
+    }
+
+    d.setDate(day + 1);
+    d.setHours(0, 0, 0, 0);
+  }
+
+  // 找不到则返回 from + 1 天
+  return new Date(from.getTime() + 24 * 60 * 60 * 1000).toISOString();
+}
+
+/**
+ * 计算定时任务的下次执行时间
+ */
+export function computeNextRun(task: Task): string | null {
+  const now = new Date();
+
+  switch (task.scheduleType) {
+    case 'once':
+      // 一次性任务：返回设定的锚定时间
+      return task.scheduleAnchor || null;
+
+    case 'interval':
+      // 间隔执行：从上次执行时间 + interval
+      if (!task.scheduleIntervalMs) return null;
+      const base = task.lastRunAt ? new Date(task.lastRunAt) : (task.scheduleAnchor ? new Date(task.scheduleAnchor) : now);
+      let next = new Date(base.getTime() + task.scheduleIntervalMs);
+      // 如果计算出的时间已过，从当前时间计算下一个
+      while (next <= now) {
+        next = new Date(next.getTime() + task.scheduleIntervalMs);
+      }
+      return next.toISOString();
+
+    case 'cron':
+      // cron 表达式
+      if (!task.scheduleExpr) return null;
+      return computeNextCronRun(task.scheduleExpr, now);
+
+    default:
+      return null;
+  }
+}

@@ -98,10 +98,13 @@ export interface GatewayStatus {
 }
 
 // 任务类型
-export type TaskType = 'standard' | 'iterative';
+export type TaskType = 'standard' | 'iterative' | 'scheduled';
 
-// 任务状态（含迭代审阅状态）
-export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'review' | 'revising' | 'accepted' | 'paused';
+// 任务状态（含迭代审阅 + 定时任务状态）
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'review' | 'revising' | 'accepted' | 'paused' | 'scheduled';
+
+// 定时调度类型
+export type ScheduleType = 'once' | 'interval' | 'cron';
 
 export interface Task {
   id: string;
@@ -116,6 +119,14 @@ export interface Task {
   reviewerName?: string;
   iteration: number;
   reviewComment?: string;
+  // 定时任务字段
+  scheduleType?: ScheduleType;
+  scheduleExpr?: string;
+  scheduleIntervalMs?: number;
+  scheduleAnchor?: string;
+  nextRunAt?: string;
+  lastRunAt?: string;
+  runCount: number;
   result?: string;
   metadata?: any;
   guidance?: string;

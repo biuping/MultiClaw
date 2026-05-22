@@ -38,6 +38,7 @@ const { Text } = Typography;
 const columns = [
   { id: 'pending', title: '📋 待办', color: '#faad14', status: 'pending' },
   { id: 'running', title: '⚡ 执行中', color: '#1677ff', status: 'running' },
+  { id: 'scheduled', title: '⏰ 定时中', color: '#722ed1', status: 'scheduled' },
   { id: 'review', title: '🔍 待审阅', color: '#722ed1', status: 'review' },
   { id: 'revising', title: '✏️ 修改中', color: '#eb2f96', status: 'revising' },
   { id: 'completed', title: '✅ 已完成', color: '#52c41a', status: 'completed' },
@@ -108,6 +109,9 @@ function SortableTaskCard({ task, onTaskClick }: SortableTaskCardProps) {
               <Tag color={priorityColor} style={{ margin: 0, fontSize: 11 }}>{priorityLabel}</Tag>
               {task.taskType === 'iterative' && (
                 <Tag color="purple" style={{ margin: 0, fontSize: 11 }}>🔄 迭代</Tag>
+              )}
+              {task.taskType === 'scheduled' && (
+                <Tag color="purple" style={{ margin: 0, fontSize: 11 }}>⏰ 定时</Tag>
               )}
               {task.taskType === 'iterative' && (task.iteration ?? 0) > 1 && (
                 <Tag color="orange" style={{ margin: 0, fontSize: 11 }}>第{task.iteration}轮</Tag>

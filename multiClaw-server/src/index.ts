@@ -21,6 +21,7 @@ import agentSkillsRouter from './routes/agent-skills';
 import { setupWebSocket } from './websocket';
 import { authMiddleware, verifyToken } from './middleware/auth';
 import { generalLimiter, chatLimiter } from './middleware/rateLimit';
+import { startScheduler } from './services/task-scheduler';
 
 const app = express();
 const server = createServer(app);
@@ -182,6 +183,9 @@ async function start() {
       console.log(`API available at http://localhost:${PORT}/api`);
       console.log(`CORS origins: ${corsOrigins.join(', ')}`);
       console.log(`Auth: ${process.env.API_KEY ? 'enabled' : 'disabled (no API_KEY set)'}`);
+
+      // 启动定时任务调度器
+      startScheduler();
     });
   } catch (error) {
     console.error('Failed to start server:', error);

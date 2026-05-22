@@ -59,3 +59,11 @@ temp/
 # Agent workspaces - contain personal/private configuration
 workspace/*/
 !workspace/.gitkeep
+
+# Misplaced agent home directories at project root (should not be committed)
+/Liu/
+/coco/
+/minor/
+/tom/
+/Doc/
+/测试助手/

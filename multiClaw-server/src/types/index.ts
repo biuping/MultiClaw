@@ -130,7 +130,10 @@ export interface AgentNode {
 }
 
 // 任务类型
-export type TaskType = 'standard' | 'iterative';
+export type TaskType = 'standard' | 'iterative' | 'scheduled';
 
 // 任务状态
-export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'review' | 'revising' | 'accepted' | 'paused';
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'review' | 'revising' | 'accepted' | 'paused' | 'scheduled';
+
+// 定时调度类型
+export type ScheduleType = 'once' | 'interval' | 'cron';
