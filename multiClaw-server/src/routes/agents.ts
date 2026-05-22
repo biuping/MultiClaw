@@ -46,7 +46,19 @@ router.post('/', validateBody(createAgentSchema), async (req, res) => {
 
     const workspaceRoot = process.env.WORKSPACE_ROOT || path.join(os.homedir(), '.multiclaw', 'workspace');
     const agentSlug = name.toLowerCase().replace(/\s+/g, '-');
-    const resolvedWorkspace = workspace || path.join(workspaceRoot, agentSlug);
+    // 规则：agent workspace 必须在 WORKSPACE_ROOT 下，且以 agent 名（slug）命名
+    // 如果用户传了不合规的 workspace，忽略并改用默认路径
+    const defaultWorkspace = path.join(workspaceRoot, agentSlug);
+    let resolvedWorkspace = defaultWorkspace;
+    if (workspace && typeof workspace === 'string') {
+      const normalized = path.resolve(workspace);
+      const inRoot = normalized.startsWith(path.resolve(workspaceRoot) + path.sep) || normalized === path.resolve(workspaceRoot);
+      if (inRoot) {
+        resolvedWorkspace = normalized;
+      } else {
+        console.warn('[agents/create] 用户指定的 workspace 不在 ' + workspaceRoot + ' 内，已重置为默认: ' + defaultWorkspace);
+      }
+    }
     
     try {
       await openclawService.setupAgentWorkspace(agentSlug, name, {
@@ -87,12 +99,60 @@ router.post('/', validateBody(createAgentSchema), async (req, res) => {
 router.put('/:id', validateBody(updateAgentSchema), async (req, res) => {
   try {
     const { name, persona, skills, workspace, role, tags, avatar, status, model } = req.body;
-    
+
+    // 获取原 agent，检查是否需要重命名 workspace 目录
+    const oldAgent = await agentService.getAgent(req.params.id);
+    if (!oldAgent) {
+      return res.status(404).json({ success: false, error: 'Agent not found' });
+    }
+
+    const workspaceRoot = process.env.WORKSPACE_ROOT || path.join(os.homedir(), '.multiclaw', 'workspace');
+    const fs = await import('fs/promises');
+    let finalWorkspace = workspace;
+
+    // 如果改名了且没有显式指定新 workspace，自动重命名 workspace 目录
+    if (name && name !== oldAgent.name && !workspace) {
+      const newSlug = name.toLowerCase().replace(/\s+/g, '-');
+      const newWorkspace = path.join(workspaceRoot, newSlug);
+      const oldWorkspace = oldAgent.workspace;
+
+      // 仅在旧路径在 workspaceRoot 内且存在时重命名
+      if (oldWorkspace && oldWorkspace.startsWith(workspaceRoot) && oldWorkspace !== newWorkspace) {
+        try {
+          await fs.access(oldWorkspace);
+          await fs.rename(oldWorkspace, newWorkspace);
+          console.log('[agents/update] workspace 目录已重命名: ' + oldWorkspace + ' -> ' + newWorkspace);
+          finalWorkspace = newWorkspace;
+        } catch (renameErr) {
+          console.warn('[agents/update] workspace 重命名失败，使用新路径并创建:', renameErr);
+          await fs.mkdir(newWorkspace, { recursive: true });
+          finalWorkspace = newWorkspace;
+        }
+      } else if (!oldWorkspace || !oldWorkspace.startsWith(workspaceRoot)) {
+        // 旧路径不在规则内，直接赋为新路径
+        finalWorkspace = newWorkspace;
+        await fs.mkdir(newWorkspace, { recursive: true }).catch(() => {});
+      }
+    }
+
+    // 如果用户显式指定了 workspace，校验必须在 WORKSPACE_ROOT 下
+    if (workspace && typeof workspace === 'string') {
+      const normalized = path.resolve(workspace);
+      const root = path.resolve(workspaceRoot);
+      if (!normalized.startsWith(root + path.sep) && normalized !== root) {
+        return res.status(400).json({
+          success: false,
+          error: 'workspace 必须在 ' + workspaceRoot + ' 下'
+        });
+      }
+      finalWorkspace = normalized;
+    }
+
     const agent = await agentService.updateAgent(req.params.id, {
       name,
       persona,
       skills,
-      workspace,
+      workspace: finalWorkspace,
       role,
       tags,
       avatar,
@@ -105,14 +165,14 @@ router.put('/:id', validateBody(updateAgentSchema), async (req, res) => {
     }
 
     // 同步更新 OpenClaw 配置
-    if (persona || skills || workspace || model) {
+    if (persona || skills || finalWorkspace || model) {
       const currentConfig = await openclawService.getAgentConfig(agent.openclawId) || {};
       await openclawService.updateAgentConfig(agent.openclawId, {
         ...currentConfig,
         name: name || currentConfig.name,
         persona: persona || currentConfig.persona,
         skills: skills || currentConfig.skills,
-        workspace: workspace || currentConfig.workspace,
+        workspace: finalWorkspace || currentConfig.workspace,
         model: model || currentConfig.model
       });
 

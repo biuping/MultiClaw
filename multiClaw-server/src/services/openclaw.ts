@@ -354,6 +354,17 @@ export class OpenClawService {
     onStream?: (chunk: string) => void,
     options?: { freshSession?: boolean }
   ): Promise<string> {
+    // 检查 workspace 路径合法性：防止数据库中损坏的路径导致 mkdir 失败
+    // 路径应该是合理的绝对路径，不包含空格与控制字符
+    const looksValid = workspace && path.isAbsolute(workspace) 
+      && !/[\s\u0000-\u001f]/.test(workspace.split('/').slice(-1)[0]) // 最后一段不带空格/控制字符
+      && (await fs.access(path.dirname(workspace)).then(() => true).catch(() => false));
+
+    if (!looksValid) {
+      console.warn('[executeWithSpawn] workspace 路径可疑或不存在: ' + JSON.stringify(workspace) + '，尝试使用 ' + agentSlug + ' 子目录');
+      workspace = path.join(getWorkspaceRoot(), agentSlug);
+    }
+
     // 确保 workspace 目录存在，避免 spawn ENOENT
     try {
       await fs.mkdir(workspace, { recursive: true });
