@@ -322,6 +322,19 @@ const migrations: Array<{ name: string; up: (db: any) => Promise<void> }> = [
       await db.execAsync('CREATE INDEX IF NOT EXISTS idx_tasks_task_type ON tasks(task_type)');
     },
   },
+  {
+    name: '008_agent_skills_persona_mode',
+    up: async (db) => {
+      // persona_mode: 'on' = 以该人格工作，'off' = 作为技能按需使用
+      try {
+        await db.execAsync("ALTER TABLE agent_skills ADD COLUMN persona_mode TEXT DEFAULT 'off'");
+      } catch (err: any) {
+        if (!String(err).includes('duplicate column')) {
+          console.warn('[migration 008] ALTER TABLE agent_skills ADD persona_mode:', err);
+        }
+      }
+    },
+  },
 ];
 
 /**

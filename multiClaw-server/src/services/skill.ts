@@ -50,6 +50,28 @@ class SkillService {
     return this.getAgentSkill(agentId, skillId);
   }
 
+  async setPersonaMode(agentId: string, skillId: string, mode: 'on' | 'off'): Promise<AgentSkill | null> {
+    const db = await getDb();
+    await db.runAsync(
+      "UPDATE agent_skills SET persona_mode = ?, updated_at = ? WHERE agent_id = ? AND skill_id = ?",
+      [mode, new Date().toISOString(), agentId, skillId]
+    );
+    return this.getAgentSkill(agentId, skillId);
+  }
+
+  /**
+   * 读取技能的 SKILL.md 内容
+   */
+  async readSkillContent(agentId: string, skillId: string): Promise<string | null> {
+    const agentWorkspace = await this.getAgentWorkspacePath(agentId);
+    const skillMdPath = path.join(agentWorkspace, 'skills', skillId, 'SKILL.md');
+    try {
+      return await fs.readFile(skillMdPath, 'utf-8');
+    } catch {
+      return null;
+    }
+  }
+
   async deleteSkill(agentId: string, skillId: string): Promise<void> {
     // 1. 获取技能记录以找到 agent 信息
     const skill = await this.getAgentSkill(agentId, skillId);
@@ -323,6 +345,7 @@ class SkillService {
       sourceUrl: row.source_url || undefined,
       version: row.version || undefined,
       enabled: row.enabled !== 0,
+      personaMode: row.persona_mode === 'on' ? 'on' : 'off',
       installedAt: row.installed_at,
       updatedAt: row.updated_at,
     };

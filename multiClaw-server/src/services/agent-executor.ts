@@ -1,5 +1,6 @@
 import { openclawService, OpenClawService } from './openclaw';
 import { agentService } from './agent';
+import { skillService } from './skill';
 import { emitTaskProgress } from './task-events';
 
 /**

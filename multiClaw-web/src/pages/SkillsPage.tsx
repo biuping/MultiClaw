@@ -71,6 +71,7 @@ export default function SkillsPage() {
     agents, fetchAgents,
     agentPrivateSkills, selectedSkillAgentId, isLoadingPrivateSkills,
     fetchAgentPrivateSkills, installAgentSkill, uninstallAgentSkill, toggleAgentSkill,
+    setPersonaMode,
   } = useAppStore();
 
   const [installVisible, setInstallVisible] = useState(false);
@@ -172,9 +173,24 @@ export default function SkillsPage() {
                     renderItem={(skill: AgentSkill) => {
                       const typeConf = skillTypeConfig[skill.skillType] || skillTypeConfig.persona;
                       const srcConf = sourceConfig[skill.source] || sourceConfig.custom;
+                      const isPersona = skill.skillType === 'persona';
                       return (
                         <List.Item
                           actions={[
+                            // 人格类技能：人格模式开关
+                            isPersona && skill.enabled ? (
+                              <Tooltip title={skill.personaMode === 'on' ? '人格模式：以该人格工作（点击切换为技能模式）' : '技能模式：按需使用（点击切换为人格模式）'} key="persona-mode">
+                                <Space size={4}>
+                                  <Text type="secondary" className="text-xs">人格</Text>
+                                  <Switch
+                                    size="small"
+                                    checked={skill.personaMode === 'on'}
+                                    onChange={(checked) => setPersonaMode(selectedSkillAgentId, skill.skillId, checked ? 'on' : 'off')}
+                                  />
+                                </Space>
+                              </Tooltip>
+                            ) : null,
+                            // 启用/禁用开关
                             <Tooltip title={skill.enabled ? '点击禁用' : '点击启用'} key="toggle">
                               <Switch
                                 size="small"
@@ -182,11 +198,13 @@ export default function SkillsPage() {
                                 onChange={(checked) => toggleAgentSkill(selectedSkillAgentId, skill.skillId, checked)}
                               />
                             </Tooltip>,
+                            // 刷新按钮
                             ...(skill.source !== 'custom' ? [
                               <Tooltip title="从源刷新" key="refresh">
                                 <Button type="text" size="small" icon={<SyncOutlined />} />
                               </Tooltip>,
                             ] : []),
+                            // 卸载按钮
                             <Popconfirm
                               title="确定卸载此技能？"
                               onConfirm={() => handleUninstall(skill.skillId)}
@@ -205,6 +223,8 @@ export default function SkillsPage() {
                                 <Tag color={typeConf.color}>{typeConf.label}</Tag>
                                 <Tag color={srcConf.color} icon={srcConf.icon}>{srcConf.label}</Tag>
                                 {!skill.enabled && <Tag color="default">已禁用</Tag>}
+                                {isPersona && skill.enabled && skill.personaMode === 'on' && <Tag color="volcano">🎭 人格模式</Tag>}
+                                {isPersona && skill.enabled && skill.personaMode === 'off' && <Tag color="geekblue">🔧 技能模式</Tag>}
                               </Space>
                             }
                             description={

@@ -74,18 +74,23 @@ router.post('/', async (req: Request<AgentSkillsParams>, res: Response) => {
   }
 });
 
-// 更新技能（启用/禁用）
+// 更新技能（启用/禁用/人格模式）
 router.put('/:skillId', async (req: Request<AgentSkillsParams>, res: Response) => {
   try {
     const { agentId, skillId } = req.params;
-    const { enabled } = req.body;
+    const { enabled, personaMode } = req.body;
 
     if (typeof enabled === 'boolean') {
       const skill = await skillService.toggleSkill(agentId, skillId!, enabled);
       return res.json({ success: true, data: skill });
     }
 
-    res.status(400).json({ success: false, error: '仅支持 enabled 字段更新' });
+    if (personaMode === 'on' || personaMode === 'off') {
+      const skill = await skillService.setPersonaMode(agentId, skillId!, personaMode);
+      return res.json({ success: true, data: skill });
+    }
+
+    res.status(400).json({ success: false, error: '仅支持 enabled 或 personaMode 字段更新' });
   } catch (error) {
     res.status(500).json({ success: false, error: String(error) });
   }

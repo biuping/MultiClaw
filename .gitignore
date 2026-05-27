@@ -67,3 +67,4 @@ workspace/*/
 /tom/
 /Doc/
 /测试助手/
+*.bak*

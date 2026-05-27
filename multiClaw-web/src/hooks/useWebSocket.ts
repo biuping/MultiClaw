@@ -65,6 +65,13 @@ export function useWebSocket(agentId: string | null) {
 
     ws.current.onclose = () => {
       setIsConnected(false);
+      // 连接断开时重置所有流式状态，避免 UI 卡在"流式输出中"
+      setIsStreaming(false);
+      setStreamContent('');
+      setToolCalls([]);
+      setCommandOutputs(new Map());
+      setPlanInfo(null);
+      setDelegationState({ active: false, progress: [], results: [] });
     };
 
     ws.current.onerror = (error) => {

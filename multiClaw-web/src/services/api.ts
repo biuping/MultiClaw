@@ -103,6 +103,8 @@ export const agentSkillApi = {
   }) => api.post<{ success: boolean; data: AgentSkill }>(`/agents/${agentId}/skills`, data),
   toggle: (agentId: string, skillId: string, enabled: boolean) =>
     api.put<{ success: boolean; data: AgentSkill }>(`/agents/${agentId}/skills/${skillId}`, { enabled }),
+  setPersonaMode: (agentId: string, skillId: string, personaMode: 'on' | 'off') =>
+    api.put<{ success: boolean; data: AgentSkill }>(`/agents/${agentId}/skills/${skillId}`, { personaMode }),
   uninstall: (agentId: string, skillId: string) =>
     api.delete<{ success: boolean }>(`/agents/${agentId}/skills/${skillId}`),
   refresh: (agentId: string, skillId: string) =>

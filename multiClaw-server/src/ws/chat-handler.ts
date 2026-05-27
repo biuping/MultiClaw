@@ -7,6 +7,7 @@
 import { chatService } from '../services/chat';
 import { agentService } from '../services/agent';
 import { openclawService } from '../services/openclaw';
+import { skillService } from '../services/skill';
 import { agentExecutor, AgentConfig } from '../services/agent-executor';
 import { CollaborationEntry } from '../types';
 import { sendToClient, broadcastToAgent } from './connection';
@@ -44,6 +45,30 @@ export async function handleCliChat(
   let fullReply = '';
   let currentSteps: { step: string; text: string; tool?: string }[] = [];
 
+  // 加载 Agent 的私有技能，区分人格模式和技能模式
+  const privateSkills = await skillService.getAgentSkills(agentId);
+  const enabledPersonaSkills = privateSkills.filter(s => s.enabled && s.skillType === 'persona');
+  const personaOnSkills = enabledPersonaSkills.filter(s => s.personaMode === 'on');
+  const personaOffSkills = enabledPersonaSkills.filter(s => s.personaMode === 'off');
+
+  // 读取人格模式开启的技能内容
+  const personaOnContents: Array<{ name: string; content: string }> = [];
+  for (const ps of personaOnSkills) {
+    const content = await skillService.readSkillContent(agentId, ps.skillId);
+    if (content) {
+      personaOnContents.push({ name: ps.name, content });
+    }
+  }
+
+  // 读取人格模式关闭的技能内容（作为普通技能提示）
+  const personaOffContents: Array<{ name: string; description: string; content: string }> = [];
+  for (const ps of personaOffSkills) {
+    const content = await skillService.readSkillContent(agentId, ps.skillId);
+    if (content) {
+      personaOffContents.push({ name: ps.name, description: ps.description || '', content });
+    }
+  }
+
   // 构建带团队上下文的消息
   const systemPrompt = openclawService.buildSystemPrompt(
     {
@@ -57,9 +82,26 @@ export async function handleCliChat(
     visibleContext.length > 0 ? visibleContext : undefined
   );
 
+  // 拼接人格技能和工具技能提示
+  let personaSection = '';
+  if (personaOnContents.length > 0) {
+    const parts = personaOnContents.map(ps =>
+      '### 人格：' + ps.name + '\n\n' + ps.content
+    );
+    personaSection = '\n\n---\n\n## 活跃人格\n\n你现在正在使用以下人格模式工作，请完全代入这些人格的视角和风格来思考和回复：\n\n' + parts.join('\n\n');
+  }
+
+  let toolSkillSection = '';
+  if (personaOffContents.length > 0) {
+    const parts = personaOffContents.map(ps =>
+      '### ' + ps.name + '\n' + (ps.description ? ps.description + '\n\n' : '\n') + ps.content
+    );
+    toolSkillSection = '\n\n---\n\n## 可用技能\n\n当任务需要时，你可以参考以下技能的知识和方法：\n\n' + parts.join('\n\n');
+  }
+
   const fullMessage = visibleContext.length > 0
-    ? systemPrompt + '\n\n---\n\n' + content
-    : content;
+    ? systemPrompt + personaSection + toolSkillSection + '\n\n---\n\n' + content
+    : (systemPrompt + personaSection + toolSkillSection + '\n\n---\n\n' + content);
 
   const agentConfig: AgentConfig = {
     id: agent.id,

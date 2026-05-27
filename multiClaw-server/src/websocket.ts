@@ -109,6 +109,7 @@ async function handleMessage(clientId: string, message: any) {
       } catch (error) {
         console.error('[chat] 对话失败:', (error as Error).message);
         sendToClient(clientId, { type: 'error', error: '对话失败: ' + (error as Error).message });
+        sendToClient(clientId, { type: 'stream_end' }); // 确保前端退出流式状态
         await agentService.updateAgentStatus(client.agentId, 'error');
       }
       break;

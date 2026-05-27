@@ -47,6 +47,7 @@ interface AppState {
   installAgentSkill: (agentId: string, data: Parameters<typeof agentSkillApi.install>[1]) => Promise<AgentSkill>;
   uninstallAgentSkill: (agentId: string, skillId: string) => Promise<void>;
   toggleAgentSkill: (agentId: string, skillId: string, enabled: boolean) => Promise<void>;
+  setPersonaMode: (agentId: string, skillId: string, mode: 'on' | 'off') => Promise<void>;
   
   setCurrentChatAgent: (agent: Agent | null) => void;
   setChatMessages: (messages: ChatMessage[]) => void;
@@ -286,6 +287,20 @@ export const useAppStore = create<AppState>((set) => ({
       }));
     } catch (error) {
       console.error('Failed to toggle agent skill:', error);
+      throw error;
+    }
+  },
+
+  setPersonaMode: async (agentId: string, skillId: string, mode: 'on' | 'off') => {
+    try {
+      await agentSkillApi.setPersonaMode(agentId, skillId, mode);
+      set((state) => ({
+        agentPrivateSkills: state.agentPrivateSkills.map((s) =>
+          s.skillId === skillId ? { ...s, personaMode: mode } : s
+        ),
+      }));
+    } catch (error) {
+      console.error('Failed to set persona mode:', error);
       throw error;
     }
   },

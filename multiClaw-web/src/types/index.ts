@@ -67,6 +67,7 @@ export interface AgentSkill {
   sourceUrl?: string;
   version?: string;
   enabled: boolean;
+  personaMode: 'on' | 'off';
   installedAt: string;
   updatedAt: string;
 }
