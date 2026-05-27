@@ -16,7 +16,7 @@ taskEvents.setMaxListeners(50);
 /** 任务进度事件类型 */
 export interface TaskProgressEvent {
   taskId: string;
-  phase: 'analysis' | 'delegation' | 'integration' | 'completed' | 'failed' | 'resume';
+  phase: 'analysis' | 'delegation' | 'integration' | 'evaluation' | 'iteration' | 'completed' | 'failed' | 'resume';
   message: string;
   detail?: any;
   timestamp: string;

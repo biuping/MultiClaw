@@ -403,7 +403,7 @@ async function executeTaskInBackground(taskId: string, mode: 'restart' | 'resume
     }
 
     await taskService.update(taskId, { status: 'completed', result: result.integration });
-    emitTaskProgress(taskId, 'completed', '任务执行完成', { delegations: result.delegations });
+    emitTaskProgress(taskId, 'completed', '任务执行完成（' + (result.iterations || 1) + ' 轮迭代）', { delegations: result.delegations, iterations: result.iterations });
 
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
