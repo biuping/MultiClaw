@@ -7,6 +7,27 @@ import { getAllTemplates, getCategories, getTemplateById, createTemplate, update
 
 import { validateBody, createTaskSchema, updateTaskSchema } from '../middleware/validate';
 
+/**
+ * 清理服务启动时卡在 running 状态的任务
+ * 服务重启后，这些任务无法恢复，应标记为 failed
+ */
+export async function cleanupStaleRunningTasks(): Promise<number> {
+  try {
+    const db = await (await import('../db')).getDb();
+    const result = await db.runAsync(
+      "UPDATE tasks SET status = 'failed', result = '服务重启，任务中断' WHERE status = 'running'"
+    );
+    const count = (result as any)?.changes || 0;
+    if (count > 0) {
+      console.log('[cleanupStaleRunningTasks] 已清理 ' + count + ' 个卡在 running 状态的任务');
+    }
+    return count;
+  } catch (err) {
+    console.warn('[cleanupStaleRunningTasks] 清理失败:', err);
+    return 0;
+  }
+}
+
 const router = Router();
 
 // 查询任务断点状态
@@ -389,13 +410,15 @@ async function executeTaskInBackground(taskId: string, mode: 'restart' | 'resume
     await taskService.addMessage(taskId, task.coordinatorId, 'assistant', result.analysis, { phase: 'analysis' });
 
     for (const d of result.delegations) {
-      if (d.success) {
-        await taskService.addMessage(taskId, '', 'assistant', d.result, {
+      await taskService.addMessage(taskId, '', 'assistant',
+        d.success ? d.result : '[委派失败] ' + d.result,
+        {
           phase: 'delegation',
           delegateTo: d.to,
           delegatedBy: coordinator.name,
-        });
-      }
+          success: d.success,
+        }
+      );
     }
 
     if (result.delegations.length > 0) {

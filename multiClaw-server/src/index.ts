@@ -22,6 +22,7 @@ import { setupWebSocket } from './websocket';
 import { authMiddleware, verifyToken } from './middleware/auth';
 import { generalLimiter, chatLimiter } from './middleware/rateLimit';
 import { startScheduler } from './services/task-scheduler';
+import { cleanupStaleRunningTasks } from './routes/tasks';
 
 const app = express();
 const server = createServer(app);
@@ -147,6 +148,9 @@ async function start() {
   try {
     await initDatabase();
     console.log('Database initialized');
+
+    // 清理服务重启前卡在 running 状态的任务
+    await cleanupStaleRunningTasks();
 
     // 同步所有数据库 agent 到 OpenClaw（注册新 agent + 同步已有 agent 的 model）
     try {

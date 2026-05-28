@@ -303,7 +303,7 @@ export class OpenClawService {
     agentConfig: any,
     skillDetails: any,
     onStream?: (chunk: string) => void,
-    options?: { freshSession?: boolean }
+    options?: { freshSession?: boolean; timeoutMs?: number }
   ): Promise<string> {
     console.log('[chatWithAgent] agent=%s model=%s message=%s freshSession=%s', agentConfig.name, agentConfig.model, message.slice(0, 50), options?.freshSession !== false);
     
@@ -319,7 +319,7 @@ export class OpenClawService {
       const freshSession = options?.freshSession !== false;
 
       // 使用本地执行模式，传入 workspace
-      const result = await this.executeWithSpawn(agentId, agentSlug, fullMessage, agentConfig.model, workspace, onStream, { freshSession });
+      const result = await this.executeWithSpawn(agentId, agentSlug, fullMessage, agentConfig.model, workspace, onStream, { freshSession, timeoutMs: options?.timeoutMs });
       
       // 检测并截断重复输出
       const dedupedResult = this.deduplicateOutput(result);
@@ -352,7 +352,7 @@ export class OpenClawService {
     model: string,
     workspace: string,
     onStream?: (chunk: string) => void,
-    options?: { freshSession?: boolean }
+    options?: { freshSession?: boolean; timeoutMs?: number }
   ): Promise<string> {
     // 检查 workspace 路径合法性：防止数据库中损坏的路径导致 mkdir 失败
     // 路径应该是合理的绝对路径，不包含空格与控制字符
@@ -420,11 +420,12 @@ export class OpenClawService {
         stderr += data.toString();
       });
 
-      // 超时处理 (1200s)
+      // 超时处理（默认 300s，可配置）
+      const timeoutMs = options?.timeoutMs || 300_000;
       const timeout = setTimeout(() => {
         child.kill('SIGTERM');
-        reject(new Error('Agent 执行超时 (1200s)'));
-      }, 1200000);
+        reject(new Error('Agent 执行超时 (' + Math.round(timeoutMs / 1000) + 's)'));
+      }, timeoutMs);
 
       child.on('close', (code) => {
         clearTimeout(timeout);

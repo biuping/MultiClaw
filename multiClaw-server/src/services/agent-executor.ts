@@ -2,6 +2,7 @@ import { openclawService, OpenClawService } from './openclaw';
 import { agentService } from './agent';
 import { skillService } from './skill';
 import { emitTaskProgress } from './task-events';
+import type { OpenClawSkill } from '../types';
 
 /**
  * Agent 配置接口
@@ -67,11 +68,20 @@ export interface TaskCheckpoint {
   iteration?: number;
 }
 
+/** 迭代限制常量 */
+const IterationLimits = {
+  MAX_ITERATIONS: 5,
+  /** 单次 Agent 对话超时（秒） */
+  AGENT_TIMEOUT_S: 300,
+  /** 完成度评估解析失败时的最大重试次数 */
+  EVAL_MAX_RETRIES: 2,
+} as const;
+
 /**
  * AgentExecutor — 统一封装 Agent 对话和委派逻辑
  * 
- * 消除各路由中重复的 chatWithAgent 调用模式，
- * 提供标准化的任务执行流程（分析→委派→整合）
+ * 提供标准化的任务执行流程（分析→委派→整合→评估）
+ * 支持多轮迭代：协调者判断任务未完成时自动进入下一轮
  * 支持断点续传：任务中断后可从上次断点恢复执行
  */
 export class AgentExecutor {
@@ -84,16 +94,21 @@ export class AgentExecutor {
   /**
    * 与单个 Agent 对话
    * @param options.freshSession 是否强制使用全新session
+   * @param options.timeoutMs 单次对话超时（毫秒），默认 300s
    */
   async chat(
     agentId: string,
     message: string,
     agentConfig: AgentConfig,
     onStream?: (chunk: string) => void,
-    options?: { freshSession?: boolean }
+    options?: { freshSession?: boolean; timeoutMs?: number }
   ): Promise<string> {
     const skills = await this.service.listSkills();
-    return this.service.chatWithAgent(agentId, message, agentConfig, skills, onStream, options);
+    const timeoutMs = options?.timeoutMs ?? IterationLimits.AGENT_TIMEOUT_S * 1000;
+    return this.service.chatWithAgent(agentId, message, agentConfig, skills, onStream, {
+      freshSession: options?.freshSession,
+      timeoutMs,
+    });
   }
 
   /**
@@ -211,6 +226,7 @@ export class AgentExecutor {
       progress('analysis', '已注入人工指导', { guidanceLength: guidance.length });
     }
 
+    // systemPrompt 只构建一次，后续轮次复用
     const systemPrompt = await this.buildCoordinatorSystemPrompt(coordinator);
 
     // 确定是否需要从断点恢复
@@ -218,8 +234,8 @@ export class AgentExecutor {
     if (mode === 'resume') {
       checkpoint = await this.getCheckpoint(taskId);
       if (checkpoint) {
-        console.log('[checkpoint] 从断点恢复: phase=' + checkpoint.phase + ', nextIndex=' + checkpoint.nextDelegationIndex);
-        progress('resume', '从断点恢复执行: 阶段=' + checkpoint.phase, { checkpoint });
+        console.log('[checkpoint] 从断点恢复: phase=' + checkpoint.phase + ', iteration=' + checkpoint.iteration);
+        progress('resume', '从断点恢复执行: 阶段=' + checkpoint.phase + ', 第' + (checkpoint.iteration || 1) + '轮', { checkpoint });
       } else {
         console.log('[checkpoint] 无断点数据，从头开始');
         progress('resume', '无断点数据，从头开始执行');
@@ -249,13 +265,14 @@ export class AgentExecutor {
     }
 
     // ========== 迭代循环 ==========
-    let iteration = 0;
+    let iteration = checkpoint?.iteration || 0;
     let finalAnalysis = '';
     let allDelegationResults: DelegationResult[] = [];
     let finalIntegration = '';
-    let currentTaskDescription = effectiveTaskDescription;
     // 累积的产出物摘要，注入到后续轮次的分析上下文
     let accumulatedDeliverables = '';
+    // 连续评估解析失败计数（防止死循环）
+    let evalParseFailCount = 0;
 
     while (iteration < IterationLimits.MAX_ITERATIONS) {
       iteration++;
@@ -263,9 +280,9 @@ export class AgentExecutor {
       console.log('[executeTeamTask] 第 ' + iteration + ' 轮迭代开始');
 
       // 如果有前轮产出物，注入到任务描述中
-      let roundTaskDescription = currentTaskDescription;
+      let roundTaskDescription = effectiveTaskDescription;
       if (accumulatedDeliverables) {
-        roundTaskDescription = currentTaskDescription +
+        roundTaskDescription = effectiveTaskDescription +
           '\n\n---\n\n## 前几轮已完成的工作\n\n' + accumulatedDeliverables +
           '\n\n请在已有成果基础上继续推进，不要重复已完成的工作，直接规划下一步。';
       }
@@ -299,7 +316,7 @@ export class AgentExecutor {
         await this.saveCheckpoint(taskId, newCheckpoint);
       }
 
-      // 清除断点引用（第一轮用完就不再需要）
+      // 清除断点引用（第一轮用完就不再需要旧断点）
       checkpoint = null;
 
       if (delegations.length === 0) {
@@ -311,7 +328,7 @@ export class AgentExecutor {
         return { analysis: finalAnalysis, delegations: allDelegationResults, integration: finalIntegration, iterations: iteration };
       }
 
-      // ========== 阶段2：执行委派 ==========
+      // ========== 阶段2：执行委派（支持断点） ==========
       progress('delegation', '第 ' + iteration + ' 轮：发现 ' + delegations.length + ' 个委派任务，开始执行...', { delegations, iteration });
 
       const delegationResults = await this.executeDelegations(
@@ -324,25 +341,50 @@ export class AgentExecutor {
       progress('integration', coordinator.name + ' 正在整合第 ' + iteration + ' 轮结果...');
 
       const resultsSummary = delegationResults
-        .map(r => r.success ? '【' + r.to + '的回复】' + r.result : '【' + r.to + '失败】' + r.result)
+        .map(r => r.success
+          ? '【' + r.to + '的回复】' + r.result
+          : '【' + r.to + '失败】' + r.result)
         .join('\n\n');
 
-      let integrationPrompt = '你是团队协调者。你之前分析了任务并委派给团队成员，以下是他们的回复：\n\n' +
-        resultsSummary + '\n\n请整合以上所有结果，给出最终的完整回复。';
-      
+      // 整合时保留上下文：告知协调者这是第几轮，原始任务是什么
+      let integrationPrompt = '你是团队协调者，这是第 ' + iteration + ' 轮执行。\n\n' +
+        '## 原始任务\n' + taskDescription + '\n\n' +
+        '## 本轮委派结果\n' + resultsSummary + '\n\n' +
+        '请整合以上所有结果，给出本轮的完整回复。' +
+        (delegationResults.some(r => !r.success)
+          ? '\n\n注意：部分委派失败了，请在回复中说明失败情况并给出替代方案或建议。'
+          : '');
+
       if (guidance) {
         integrationPrompt += '\n\n---\n\n## 人工指导（整合时必须遵循）\n\n' + guidance;
       }
 
+      // 整合用 freshSession=false 保持上下文连贯性，但仅限本任务内的 session
+      // 使用 freshSession=true 但把关键上下文写在 prompt 里（更可靠）
       const integration = await this.chat(coordinator.id, integrationPrompt, coordinator, undefined, { freshSession: true });
 
-      finalAnalysis = iteration === 1 ? analysis : finalAnalysis + '\n\n---\n\n## 第 ' + iteration + ' 轮分析\n\n' + analysis;
+      finalAnalysis = iteration === 1
+        ? analysis
+        : finalAnalysis + '\n\n---\n\n## 第 ' + iteration + ' 轮分析\n\n' + analysis;
       finalIntegration = integration;
 
       // ========== 完成度评估 ==========
       const evaluation = await this.evaluateCompletion(
         coordinator, taskDescription, integration, delegationResults, iteration, progress
       );
+
+      // 解析失败计数
+      if (evaluation.reason.includes('无法解析评估结果')) {
+        evalParseFailCount++;
+        if (evalParseFailCount >= IterationLimits.EVAL_MAX_RETRIES) {
+          console.warn('[executeTeamTask] 连续 ' + evalParseFailCount + ' 次评估解析失败，强制完成任务避免死循环');
+          await this.clearCheckpoint(taskId);
+          progress('completed', '任务在第 ' + iteration + ' 轮完成（评估解析失败，强制结束）', { iteration });
+          return { analysis: finalAnalysis, delegations: allDelegationResults, integration: finalIntegration, iterations: iteration };
+        }
+      } else {
+        evalParseFailCount = 0;
+      }
 
       progress('evaluation', '完成度评估: ' + (evaluation.isComplete ? '已完成 ✅' : '未完成，需继续 🔄') + ' — ' + evaluation.reason, {
         iteration,
@@ -363,17 +405,34 @@ export class AgentExecutor {
         .filter(r => r.success)
         .map(r => '**' + r.to + '**: ' + r.task.slice(0, 80) + ' — ✅ 已完成')
         .join('\n');
-      accumulatedDeliverables += (accumulatedDeliverables ? '\n\n' : '') + '### 第 ' + iteration + ' 轮产出\n' + successItems;
+      const failedItems = delegationResults
+        .filter(r => !r.success)
+        .map(r => '**' + r.to + '**: ' + r.task.slice(0, 80) + ' — ❌ 失败（' + r.result.slice(0, 50) + '）')
+        .join('\n');
+
+      accumulatedDeliverables += (accumulatedDeliverables ? '\n\n' : '') + '### 第 ' + iteration + ' 轮产出\n';
+      if (successItems) accumulatedDeliverables += successItems;
+      if (failedItems) accumulatedDeliverables += '\n\n### 失败项（需要重试或替代方案）\n' + failedItems;
 
       // 如果评估中包含 nextSteps，直接用它们构建下一轮任务描述
       if (evaluation.nextSteps && evaluation.nextSteps.length > 0) {
         const nextStepsDesc = evaluation.nextSteps
           .map(s => '- 委派 ' + s.to + ': ' + s.task)
           .join('\n');
-        accumulatedDeliverables += '\n\n### 下一轮待完成\n' + nextStepsDesc;
+        accumulatedDeliverables += '\n\n### 下一轮计划\n' + nextStepsDesc;
       }
 
       console.log('[executeTeamTask] 第 ' + iteration + ' 轮未完成，继续迭代。原因: ' + evaluation.reason);
+
+      // 保存迭代状态作为断点
+      await this.saveCheckpoint(taskId, {
+        phase: 'integration',
+        analysis: finalAnalysis,
+        delegationPlan: evaluation.nextSteps,
+        completedDelegations: [],
+        nextDelegationIndex: 0,
+        iteration,
+      });
     }
 
     // 达到最大迭代次数
@@ -385,7 +444,7 @@ export class AgentExecutor {
   /**
    * 执行一轮委派任务
    * 
-   * 从 executeTeamTask 中抽取，支持断点保存
+   * 支持断点保存：每个委派完成后保存进度
    */
   private async executeDelegations(
     taskId: string,
@@ -438,6 +497,16 @@ export class AgentExecutor {
         progress('delegation', delegation.to + ' 委派失败: ' + errMsg.slice(0, 50), { to: delegation.to, success: false });
         // 单个委派失败不中断整个流程，继续执行其他委派
       }
+
+      // 每个委派后保存断点，crash 后可恢复
+      await this.saveCheckpoint(taskId, {
+        phase: 'delegation',
+        analysis: undefined, // 已在第一轮保存过
+        delegationPlan: delegations,
+        completedDelegations: delegationResults,
+        nextDelegationIndex: i + 1,
+        iteration: undefined, // 由外层维护
+      });
     }
 
     return delegationResults;
@@ -463,7 +532,7 @@ export class AgentExecutor {
     const analysisPrompt = systemPrompt + '\n\n---\n\n## 团队任务\n\n' + taskDescription +
       iterationHint +
       '\n\n请分析这个任务，确定需要委派给哪些同事，以及各自负责什么。如果你自己也能承担部分工作，直接写出来。使用 DELEGATE 标记来委派任务。' +
-      '\n\n## 委派原则（必须遵守）\n\n1. **按能力匹配委派**：仔细阅读每位同事的职责和技能，将任务委派给最合适的人。例如文档/Word/Excel相关任务必须委派给文档编辑手，代码相关任务委派给程序员，产品分析任务委派给产品经理。\n2. **不要跨领域委派**：不要把文档任务委派给程序员，不要把代码任务委派给产品经理。\n3. **覆盖所有子任务**：确保任务的每个环节都有对应的人负责，不要遗漏。' +
+      '\n\n## 委派原则（必须遵守）\n\n1. **按能力匹配委派**：仔细阅读每位同事的职责和技能，将任务委派给最合适的人。\n2. **不要跨领域委派**：不要把文档任务委派给程序员，不要把代码任务委派给产品经理。\n3. **覆盖所有子任务**：确保任务的每个环节都有对应的人负责，不要遗漏。' +
       '\n\n## 任务执行原则（必须遵守）\n\n1. **目标导向**：先明确"怎样才算完成"，再分配工作。任务必须推进到用户可使用的最终状态。\n2. **不要停在中间环节**：如果当前产出只是中间产物（比如只写了PRD但任务是"编写项目"），必须规划后续步骤继续推进。\n3. **连续推进**：每个环节的产出应该成为下一个环节的输入，直到任务真正完成。';
 
     return this.chat(coordinator.id, analysisPrompt, coordinator, undefined, { freshSession: true });
@@ -487,24 +556,25 @@ export class AgentExecutor {
 
     const deliverables = delegationResults
       .filter(r => r.success)
-      .map(r => '- ' + r.to + ': ' + r.task.slice(0, 100))
+      .map(r => '- ' + r.to + ': ' + r.task.slice(0, 100) + ' ✅')
       .join('\n');
 
     const failedList = delegationResults
       .filter(r => !r.success)
-      .map(r => '- ' + r.to + ': ' + r.result.slice(0, 100))
+      .map(r => '- ' + r.to + ': ' + r.task.slice(0, 100) + ' ❌ (' + r.result.slice(0, 80) + ')')
       .join('\n');
 
     const prompt = '你之前执行了以下任务，请评估任务是否已经完成。\n\n' +
       '## 原始任务\n' + originalTask + '\n\n' +
       '## 当前已完成的工作\n' + (deliverables || '无') + '\n\n' +
       (failedList ? '## 失败的工作\n' + failedList + '\n\n' : '') +
-      '## 整合结论摘要\n' + integration.slice(0, 2000) + '\n\n' +
+      '## 整合结论摘要\n' + integration.slice(0, 3000) + '\n\n' +
       '---\n\n' +
       '请严格评估：**原始任务的目标是否已经全部达成？**\n\n' +
       '- 如果任务只是产出了中间产物（比如只写了PRD但任务是"编写项目"），则任务未完成\n' +
       '- 如果任务要求可交付的最终产物，必须确认最终产物已产出\n' +
-      '- 如果是简单的单步任务（比如写一个文档、查一个信息），一轮可能就够了\n\n' +
+      '- 如果是简单的单步任务（比如写一个文档、查一个信息），一轮可能就够了\n' +
+      '- 如果所有委派都失败了，任务也未完成\n\n' +
       '必须回复以下JSON格式，不要输出其他内容：\n' +
       '```json\n' +
       '{\n' +
@@ -525,9 +595,12 @@ export class AgentExecutor {
 
   /**
    * 解析完成度评估的 JSON 响应
+   * 
+   * 优先精确解析，fallback 到宽松提取。
+   * 解析失败时默认 isComplete=false（避免过早终止本该继续的任务）。
    */
   private parseCompletionEvaluation(text: string): CompletionEvaluation {
-    // 尝试从 markdown 代码块中提取 JSON
+    // 尝试1：从 markdown 代码块中提取 JSON
     const codeBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
     const jsonStr = codeBlockMatch ? codeBlockMatch[1].trim() : text.trim();
     
@@ -536,7 +609,7 @@ export class AgentExecutor {
       if (typeof parsed.isComplete === 'boolean') {
         return {
           isComplete: parsed.isComplete,
-          reason: parsed.reason || '',
+          reason: String(parsed.reason || ''),
           nextSteps: Array.isArray(parsed.nextSteps)
             ? parsed.nextSteps.filter((s: any) => s.to && s.task).map((s: any) => ({ to: String(s.to), task: String(s.task) }))
             : [],
@@ -546,20 +619,43 @@ export class AgentExecutor {
       console.warn('[parseCompletionEvaluation] JSON 解析失败，尝试宽松提取:', err);
     }
 
-    // 宽松提取：如果文本中包含完成/未完成关键词，做简单判断
-    const lowerText = text.toLowerCase();
-    if (lowerText.includes('"iscomplete": true') || lowerText.includes('"isComplete": true')) {
+    // 尝试2：宽松提取——在全文中搜索 isComplete 的值
+    const isCompleteTrueMatch = text.match(/"?isComplete"?\s*:\s*true/i);
+    const isCompleteFalseMatch = text.match(/"?isComplete"?\s*:\s*false/i);
+
+    if (isCompleteTrueMatch && !isCompleteFalseMatch) {
       return { isComplete: true, reason: '协调者判定任务已完成', nextSteps: [] };
     }
+    if (isCompleteFalseMatch && !isCompleteTrueMatch) {
+      // 尝试提取 nextSteps
+      const nextSteps: Array<{ to: string; task: string }> = [];
+      const toMatches = [...text.matchAll(/"to"\s*:\s*"([^"]+)".*?"task"\s*:\s*"([^"]+)"/gs)];
+      for (const m of toMatches) {
+        nextSteps.push({ to: m[1], task: m[2] });
+      }
+      return { isComplete: false, reason: '协调者判定任务未完成', nextSteps };
+    }
 
-    // 默认：认为完成（避免无限循环）
-    console.warn('[parseCompletionEvaluation] 无法解析完成度评估，默认视为完成');
-    return { isComplete: true, reason: '无法解析评估结果，默认视为完成', nextSteps: [] };
+    // 尝试3：语义判断——检查文本中的关键词
+    const lowerText = text.toLowerCase();
+    const completeKeywords = ['任务已完成', '已经完成', '目标达成', 'task is complete', 'is complete', '已经达成'];
+    const incompleteKeywords = ['任务未完成', '尚未完成', '还需要', '继续推进', '下一步', 'not complete', 'incomplete'];
+
+    let hasComplete = completeKeywords.some(k => lowerText.includes(k));
+    let hasIncomplete = incompleteKeywords.some(k => lowerText.includes(k));
+
+    if (hasIncomplete && !hasComplete) {
+      return { isComplete: false, reason: '语义判断：任务未完成', nextSteps: [] };
+    }
+    if (hasComplete && !hasIncomplete) {
+      return { isComplete: true, reason: '语义判断：任务已完成', nextSteps: [] };
+    }
+
+    // 最终 fallback：默认未完成（保守策略，避免过早终止）
+    console.warn('[parseCompletionEvaluation] 无法解析完成度评估，默认视为未完成');
+    return { isComplete: false, reason: '无法解析评估结果，默认视为未完成', nextSteps: [] };
   }
 
-  /**
-   * 解析 DELEGATE 标记
-   */
   /**
    * 解析 DELEGATE 标记
    * 
@@ -572,21 +668,17 @@ export class AgentExecutor {
     let searchIdx = 0;
 
     while (true) {
-      // 找到 DELEGATE: 标记
       const delegateIdx = text.indexOf('DELEGATE:', searchIdx);
       if (delegateIdx === -1) break;
       
       let idx = delegateIdx + 'DELEGATE:'.length;
-      // 跳过空白
       while (idx < text.length && ' \t\n'.includes(text[idx])) idx++;
       
-      // 找到起始 {
       if (idx >= text.length || text[idx] !== '{') {
         searchIdx = idx;
         continue;
       }
       
-      // 用大括号计数找到匹配的 }
       const start = idx;
       let braceCount = 0;
       let inString = false;
@@ -627,7 +719,7 @@ export class AgentExecutor {
       try {
         const payload = JSON.parse(rawJson);
         if (payload.to && payload.task) {
-          results.push({ to: payload.to, task: payload.task });
+          results.push({ to: String(payload.to), task: String(payload.task) });
           continue;
         }
       } catch {}
@@ -651,11 +743,6 @@ export class AgentExecutor {
     return results;
   }
 }
-
-/** 迭代限制常量 */
-const IterationLimits = {
-  MAX_ITERATIONS: 5,
-} as const;
 
 /** 全局 AgentExecutor 实例 */
 export const agentExecutor = new AgentExecutor();
